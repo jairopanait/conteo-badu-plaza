@@ -8,7 +8,6 @@ const {
   EmbedBuilder,
   GatewayIntentBits,
   ModalBuilder,
-  StringSelectMenuBuilder,
   TextInputBuilder,
   TextInputStyle
 } = require('discord.js');
@@ -43,24 +42,41 @@ const money = new Intl.NumberFormat('en-US', {
   maximumFractionDigits: 0
 });
 
-function panelComponents() {
-  const select = new StringSelectMenuBuilder()
-    .setCustomId('sale:item')
-    .setPlaceholder('Selecciona el item vendido')
-    .addOptions(ITEMS.map((item) => ({
-      label: item.name,
-      description: money.format(item.price),
-      value: item.id
-    })));
-  return [new ActionRowBuilder().addComponents(select)];
-}
+const ITEMS_PER_PAGE = 10;
+const PAGE_COUNT = Math.ceil(ITEMS.length / ITEMS_PER_PAGE);
 
-function panelEmbed() {
-  return new EmbedBuilder()
-    .setColor(0x5865f2)
-    .setTitle('Registro de ventas')
-    .setDescription('Selecciona el item vendido. Después introduce únicamente la cantidad.')
-    .setFooter({ text: 'CONTEO_BADU_PLAZA_PANEL_V1' });
+function panelPayload(page = 0) {
+  const safePage = Math.min(Math.max(page, 0), PAGE_COUNT - 1);
+  const pageItems = ITEMS.slice(
+    safePage * ITEMS_PER_PAGE,
+    (safePage + 1) * ITEMS_PER_PAGE
+  );
+  const navigation = new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId(`sale:page:${(safePage - 1 + PAGE_COUNT) % PAGE_COUNT}`)
+      .setEmoji('⬅️')
+      .setStyle(ButtonStyle.Primary),
+    new ButtonBuilder()
+      .setCustomId(`sale:page:${(safePage + 1) % PAGE_COUNT}`)
+      .setEmoji('➡️')
+      .setStyle(ButtonStyle.Primary)
+  );
+  const itemRows = [];
+  for (let index = 0; index < pageItems.length; index += 5) {
+    itemRows.push(new ActionRowBuilder().addComponents(
+      pageItems.slice(index, index + 5).map((item) =>
+        new ButtonBuilder()
+          .setCustomId(`sale:item:${item.id}`)
+          .setLabel(item.name)
+          .setStyle(ButtonStyle.Secondary)
+      )
+    ));
+  }
+  return {
+    content: `**Categoría: ${safePage + 1}. Ventas**\nSelecciona el artículo vendido · Página ${safePage + 1}/${PAGE_COUNT}`,
+    embeds: [],
+    components: [navigation, ...itemRows]
+  };
 }
 
 async function ensurePanel() {
@@ -68,12 +84,18 @@ async function ensurePanel() {
   if (!channel?.isTextBased()) throw new Error('El canal de pantalla no es un canal de texto');
 
   const recent = await channel.messages.fetch({ limit: 100 });
-  const existing = recent.find((message) =>
-    message.author.id === client.user.id &&
-    message.embeds.some((embed) => embed.footer?.text === 'CONTEO_BADU_PLAZA_PANEL_V1')
-  );
+  const existing = recent.find((message) => {
+    if (message.author.id !== client.user.id) return false;
+    const isOldPanel = message.embeds.some(
+      (embed) => embed.footer?.text === 'CONTEO_BADU_PLAZA_PANEL_V1'
+    );
+    const isButtonPanel = message.components.some((row) =>
+      row.components.some((component) => component.customId?.startsWith('sale:page:'))
+    );
+    return isOldPanel || isButtonPanel;
+  });
 
-  const payload = { embeds: [panelEmbed()], components: panelComponents() };
+  const payload = panelPayload(0);
   if (existing) await existing.edit(payload);
   else await channel.send(payload);
 }
@@ -100,9 +122,16 @@ client.once('ready', async () => {
 
 client.on('interactionCreate', async (interaction) => {
   try {
-    if (interaction.isStringSelectMenu() && interaction.customId === 'sale:item') {
+    if (interaction.isButton() && interaction.customId.startsWith('sale:page:')) {
       if (await denyIfUnauthorized(interaction)) return;
-      const item = ITEM_BY_ID.get(interaction.values[0]);
+      const page = Number(interaction.customId.slice('sale:page:'.length));
+      await interaction.update(panelPayload(page));
+      return;
+    }
+
+    if (interaction.isButton() && interaction.customId.startsWith('sale:item:')) {
+      if (await denyIfUnauthorized(interaction)) return;
+      const item = ITEM_BY_ID.get(interaction.customId.slice('sale:item:'.length));
       if (!item) return interaction.reply({ content: 'Item no válido.', ephemeral: true });
 
       const modal = new ModalBuilder()
