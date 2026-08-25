@@ -32,6 +32,8 @@ for (const name of REQUIRED_ENV) {
 }
 
 const client = new Client({ intents: [GatewayIntentBits.Guilds] });
+const PANEL_CHANNEL_ID = '1541797314581241916';
+const PREVIOUS_PANEL_CHANNEL_ID = '1541196954837581946';
 const SUMMARY_ROLE_ID = process.env.SUMMARY_ROLE_ID || '1541197720197406760';
 const TIMEZONE = process.env.TIMEZONE || 'Europe/Madrid';
 const supabase = createClient(
@@ -65,28 +67,39 @@ function panelPayload() {
   };
 }
 
+function isSalesPanelMessage(message) {
+  if (message.author.id !== client.user.id) return false;
+  const isOldPanel = message.embeds.some(
+    (embed) => embed.footer?.text === 'CONTEO_BADU_PLAZA_PANEL_V1'
+  );
+  const isButtonPanel = message.components.some((row) =>
+    row.components.some((component) =>
+      component.customId?.startsWith('sale:page:') ||
+      component.customId?.startsWith('sale:item:')
+    )
+  );
+  return isOldPanel || isButtonPanel;
+}
+
 async function ensurePanel() {
-  const channel = await client.channels.fetch(process.env.PANEL_CHANNEL_ID);
+  const channel = await client.channels.fetch(PANEL_CHANNEL_ID);
   if (!channel?.isTextBased()) throw new Error('El canal de pantalla no es un canal de texto');
 
   const recent = await channel.messages.fetch({ limit: 100 });
-  const existing = recent.find((message) => {
-    if (message.author.id !== client.user.id) return false;
-    const isOldPanel = message.embeds.some(
-      (embed) => embed.footer?.text === 'CONTEO_BADU_PLAZA_PANEL_V1'
-    );
-    const isButtonPanel = message.components.some((row) =>
-      row.components.some((component) =>
-        component.customId?.startsWith('sale:page:') ||
-        component.customId?.startsWith('sale:item:')
-      )
-    );
-    return isOldPanel || isButtonPanel;
-  });
+  const existing = recent.find(isSalesPanelMessage);
 
   const payload = panelPayload();
   if (existing) await existing.edit(payload);
   else await channel.send(payload);
+}
+
+async function removePreviousPanel() {
+  if (PREVIOUS_PANEL_CHANNEL_ID === PANEL_CHANNEL_ID) return;
+  const channel = await client.channels.fetch(PREVIOUS_PANEL_CHANNEL_ID).catch(() => null);
+  if (!channel?.isTextBased()) return;
+  const recent = await channel.messages.fetch({ limit: 100 });
+  const panels = recent.filter(isSalesPanelMessage);
+  await Promise.all(panels.map((message) => message.delete()));
 }
 
 function hasAuthorizedRole(interaction) {
@@ -145,6 +158,7 @@ client.once('ready', async () => {
   try {
     await client.application.commands.set([summaryCommand.toJSON()], process.env.DISCORD_GUILD_ID);
     console.log('Comando /resumen preparado');
+    await removePreviousPanel();
     await ensurePanel();
     console.log('Panel de ventas preparado');
   } catch (error) {
