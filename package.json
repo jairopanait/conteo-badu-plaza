@@ -1,0 +1,19 @@
+{
+  "name": "conteo-badu-plaza",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Bot de Discord para registrar ventas por item en Supabase",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "check": "node --check src/index.js && node --check src/items.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.57.4",
+    "discord.js": "^14.22.1",
+    "dotenv": "^17.2.2"
+  }
+}
