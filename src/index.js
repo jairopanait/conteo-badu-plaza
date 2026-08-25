@@ -42,29 +42,11 @@ const money = new Intl.NumberFormat('en-US', {
   maximumFractionDigits: 0
 });
 
-const ITEMS_PER_PAGE = 10;
-const PAGE_COUNT = Math.ceil(ITEMS.length / ITEMS_PER_PAGE);
-
-function panelPayload(page = 0) {
-  const safePage = Math.min(Math.max(page, 0), PAGE_COUNT - 1);
-  const pageItems = ITEMS.slice(
-    safePage * ITEMS_PER_PAGE,
-    (safePage + 1) * ITEMS_PER_PAGE
-  );
-  const navigation = new ActionRowBuilder().addComponents(
-    new ButtonBuilder()
-      .setCustomId(`sale:page:${(safePage - 1 + PAGE_COUNT) % PAGE_COUNT}`)
-      .setEmoji('⬅️')
-      .setStyle(ButtonStyle.Primary),
-    new ButtonBuilder()
-      .setCustomId(`sale:page:${(safePage + 1) % PAGE_COUNT}`)
-      .setEmoji('➡️')
-      .setStyle(ButtonStyle.Primary)
-  );
+function panelPayload() {
   const itemRows = [];
-  for (let index = 0; index < pageItems.length; index += 5) {
+  for (let index = 0; index < ITEMS.length; index += 5) {
     itemRows.push(new ActionRowBuilder().addComponents(
-      pageItems.slice(index, index + 5).map((item) =>
+      ITEMS.slice(index, index + 5).map((item) =>
         new ButtonBuilder()
           .setCustomId(`sale:item:${item.id}`)
           .setLabel(item.name)
@@ -73,9 +55,9 @@ function panelPayload(page = 0) {
     ));
   }
   return {
-    content: `**Categoría: ${safePage + 1}. Ventas**\nSelecciona el artículo vendido · Página ${safePage + 1}/${PAGE_COUNT}`,
+    content: '**Categoría: Ventas**\nSelecciona el artículo vendido:',
     embeds: [],
-    components: [navigation, ...itemRows]
+    components: itemRows
   };
 }
 
@@ -90,12 +72,15 @@ async function ensurePanel() {
       (embed) => embed.footer?.text === 'CONTEO_BADU_PLAZA_PANEL_V1'
     );
     const isButtonPanel = message.components.some((row) =>
-      row.components.some((component) => component.customId?.startsWith('sale:page:'))
+      row.components.some((component) =>
+        component.customId?.startsWith('sale:page:') ||
+        component.customId?.startsWith('sale:item:')
+      )
     );
     return isOldPanel || isButtonPanel;
   });
 
-  const payload = panelPayload(0);
+  const payload = panelPayload();
   if (existing) await existing.edit(payload);
   else await channel.send(payload);
 }
@@ -122,13 +107,6 @@ client.once('ready', async () => {
 
 client.on('interactionCreate', async (interaction) => {
   try {
-    if (interaction.isButton() && interaction.customId.startsWith('sale:page:')) {
-      if (await denyIfUnauthorized(interaction)) return;
-      const page = Number(interaction.customId.slice('sale:page:'.length));
-      await interaction.update(panelPayload(page));
-      return;
-    }
-
     if (interaction.isButton() && interaction.customId.startsWith('sale:item:')) {
       if (await denyIfUnauthorized(interaction)) return;
       const item = ITEM_BY_ID.get(interaction.customId.slice('sale:item:'.length));
