@@ -56,7 +56,7 @@ function panelPayload() {
         new ButtonBuilder()
           .setCustomId(`sale:item:${item.id}`)
           .setLabel(item.name)
-          .setStyle(ButtonStyle.Secondary)
+          .setStyle(ButtonStyle.Primary)
       )
     ));
   }
