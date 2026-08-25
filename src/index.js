@@ -289,10 +289,13 @@ client.on('interactionCreate', async (interaction) => {
       const salesChannel = await client.channels.fetch(process.env.SALES_CHANNEL_ID);
       const message = await salesChannel.send({
         embeds: [embed],
-        components: [new ActionRowBuilder().addComponents(cancel)]
+        components: []
       });
       await supabase.from('sales').update({ discord_message_id: message.id }).eq('id', sale.id);
-      await interaction.editReply(`Venta registrada correctamente: **${money.format(total)}**.`);
+      await interaction.editReply({
+        content: `Venta registrada correctamente: **${money.format(total)}**. Solo tú puedes ver este botón.`,
+        components: [new ActionRowBuilder().addComponents(cancel)]
+      });
       return;
     }
 
@@ -319,11 +322,22 @@ client.on('interactionCreate', async (interaction) => {
         .eq('seller_discord_id', interaction.user.id);
       if (updateError) throw updateError;
 
-      const cancelledEmbed = EmbedBuilder.from(interaction.message.embeds[0])
-        .setColor(0xe74c3c)
-        .setTitle('Venta cancelada')
-        .addFields({ name: 'Cancelada por', value: `<@${interaction.user.id}>` });
-      await interaction.update({ embeds: [cancelledEmbed], components: [] });
+      if (sale.discord_message_id) {
+        const salesChannel = await client.channels.fetch(process.env.SALES_CHANNEL_ID);
+        const publicMessage = await salesChannel.messages.fetch(sale.discord_message_id).catch(() => null);
+        if (publicMessage?.embeds[0]) {
+          const cancelledEmbed = EmbedBuilder.from(publicMessage.embeds[0])
+            .setColor(0xe74c3c)
+            .setTitle('Venta cancelada')
+            .addFields({ name: 'Cancelada por', value: `<@${interaction.user.id}>` });
+          await publicMessage.edit({ embeds: [cancelledEmbed], components: [] });
+        }
+      }
+      await interaction.update({
+        content: 'Tu venta ha sido cancelada correctamente.',
+        embeds: [],
+        components: []
+      });
     }
   } catch (error) {
     console.error('Error procesando interacción:', error);
