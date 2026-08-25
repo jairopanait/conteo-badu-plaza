@@ -258,7 +258,7 @@ client.on('interactionCreate', async (interaction) => {
       if (error) throw error;
 
       const embed = new EmbedBuilder()
-        .setColor(0x00e640)
+        .setColor(0xf4a7c1)
         .setTitle('🛒 Nueva venta')
         .setDescription(
           `**Usuario:** <@${interaction.user.id}>\n` +
