@@ -7,6 +7,7 @@ const {
   Client,
   EmbedBuilder,
   GatewayIntentBits,
+  MessageFlags,
   ModalBuilder,
   SlashCommandBuilder,
   TextInputBuilder,
@@ -253,7 +254,7 @@ client.on('interactionCreate', async (interaction) => {
         return;
       }
 
-      await interaction.deferReply({ ephemeral: true });
+      await interaction.deferReply({ flags: MessageFlags.Ephemeral });
       const total = item.price * quantity;
       const { data: sale, error } = await supabase
         .from('sales')
