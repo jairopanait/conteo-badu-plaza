@@ -8,10 +8,12 @@ const {
   EmbedBuilder,
   GatewayIntentBits,
   ModalBuilder,
+  SlashCommandBuilder,
   TextInputBuilder,
   TextInputStyle
 } = require('discord.js');
 const { createClient } = require('@supabase/supabase-js');
+const { DateTime } = require('luxon');
 const { ITEMS, ITEM_BY_ID } = require('./items');
 
 const REQUIRED_ENV = [
@@ -30,6 +32,8 @@ for (const name of REQUIRED_ENV) {
 }
 
 const client = new Client({ intents: [GatewayIntentBits.Guilds] });
+const SUMMARY_ROLE_ID = process.env.SUMMARY_ROLE_ID || '1541197720197406760';
+const TIMEZONE = process.env.TIMEZONE || 'Europe/Madrid';
 const supabase = createClient(
   process.env.SUPABASE_URL,
   process.env.SUPABASE_SERVICE_ROLE_KEY,
@@ -89,6 +93,47 @@ function hasAuthorizedRole(interaction) {
   return interaction.inGuild() && interaction.member.roles.cache.has(process.env.AUTHORIZED_ROLE_ID);
 }
 
+function hasSummaryRole(interaction) {
+  return interaction.inGuild() && interaction.member.roles.cache.has(SUMMARY_ROLE_ID);
+}
+
+const summaryCommand = new SlashCommandBuilder()
+  .setName('resumen')
+  .setDescription('Consulta el resumen de ventas de una persona')
+  .addStringOption((option) =>
+    option
+      .setName('periodo')
+      .setDescription('Periodo que quieres consultar')
+      .setRequired(true)
+      .addChoices(
+        { name: 'Día actual', value: 'dia' },
+        { name: 'Semana actual', value: 'semana' },
+        { name: 'Mes actual', value: 'mes' }
+      )
+  )
+  .addUserOption((option) =>
+    option
+      .setName('usuario')
+      .setDescription('Persona cuyo resumen quieres consultar')
+      .setRequired(true)
+  );
+
+function periodRange(period) {
+  const now = DateTime.now().setZone(TIMEZONE);
+  const starts = {
+    dia: now.startOf('day'),
+    semana: now.startOf('week'),
+    mes: now.startOf('month')
+  };
+  const start = starts[period];
+  const end = period === 'dia'
+    ? start.plus({ days: 1 })
+    : period === 'semana'
+      ? start.plus({ weeks: 1 })
+      : start.plus({ months: 1 });
+  return { start, end };
+}
+
 async function denyIfUnauthorized(interaction) {
   if (hasAuthorizedRole(interaction)) return false;
   await interaction.reply({ content: 'No tienes el rol autorizado para registrar ventas.', ephemeral: true });
@@ -98,6 +143,8 @@ async function denyIfUnauthorized(interaction) {
 client.once('ready', async () => {
   console.log(`Bot conectado como ${client.user.tag}`);
   try {
+    await client.application.commands.set([summaryCommand.toJSON()], process.env.DISCORD_GUILD_ID);
+    console.log('Comando /resumen preparado');
     await ensurePanel();
     console.log('Panel de ventas preparado');
   } catch (error) {
@@ -107,6 +154,58 @@ client.once('ready', async () => {
 
 client.on('interactionCreate', async (interaction) => {
   try {
+    if (interaction.isChatInputCommand() && interaction.commandName === 'resumen') {
+      if (!hasSummaryRole(interaction)) {
+        await interaction.reply({ content: 'No tienes el rol autorizado para consultar resúmenes.', ephemeral: true });
+        return;
+      }
+      await interaction.deferReply();
+      const period = interaction.options.getString('periodo', true);
+      const target = interaction.options.getUser('usuario', true);
+      const { start, end } = periodRange(period);
+      const { data: sales, error } = await supabase
+        .from('sales')
+        .select('item_id,item_name,quantity,total')
+        .eq('guild_id', interaction.guildId)
+        .eq('seller_discord_id', target.id)
+        .eq('status', 'active')
+        .gte('created_at', start.toUTC().toISO())
+        .lt('created_at', end.toUTC().toISO());
+      if (error) throw error;
+
+      const totalsByItem = new Map();
+      let totalUnits = 0;
+      let totalMoney = 0;
+      for (const sale of sales) {
+        totalUnits += sale.quantity;
+        totalMoney += Number(sale.total);
+        const current = totalsByItem.get(sale.item_id) || { name: sale.item_name, quantity: 0 };
+        current.quantity += sale.quantity;
+        totalsByItem.set(sale.item_id, current);
+      }
+      const itemLines = [...totalsByItem.values()]
+        .sort((a, b) => b.quantity - a.quantity)
+        .map((item) => `• **${item.name}:** ${item.quantity.toLocaleString('es-ES')}`)
+        .join('\n') || 'No hay artículos registrados en este periodo.';
+      const periodNames = { dia: 'Día actual', semana: 'Semana actual', mes: 'Mes actual' };
+      const embed = new EmbedBuilder()
+        .setColor(0x5865f2)
+        .setTitle(`📊 Resumen · ${periodNames[period]}`)
+        .setDescription(`**Usuario:** <@${target.id}>\n**Discord ID:** \`${target.id}\``)
+        .addFields(
+          { name: 'Total de artículos', value: totalUnits.toLocaleString('es-ES'), inline: true },
+          { name: 'Número de ventas', value: sales.length.toLocaleString('es-ES'), inline: true },
+          { name: 'Dinero total', value: `**${money.format(totalMoney)}**`, inline: true },
+          { name: 'Artículos vendidos', value: itemLines }
+        )
+        .setFooter({
+          text: `${start.toFormat('dd/MM/yyyy')} – ${end.minus({ milliseconds: 1 }).toFormat('dd/MM/yyyy')}`
+        })
+        .setTimestamp();
+      await interaction.editReply({ embeds: [embed] });
+      return;
+    }
+
     if (interaction.isButton() && interaction.customId.startsWith('sale:item:')) {
       if (await denyIfUnauthorized(interaction)) return;
       const item = ITEM_BY_ID.get(interaction.customId.slice('sale:item:'.length));
@@ -159,18 +258,16 @@ client.on('interactionCreate', async (interaction) => {
       if (error) throw error;
 
       const embed = new EmbedBuilder()
-        .setColor(0x2ecc71)
-        .setTitle('Venta registrada')
-        .addFields(
-          { name: 'Vendedor', value: `<@${interaction.user.id}>`, inline: true },
-          { name: 'Discord ID', value: interaction.user.id, inline: true },
-          { name: 'Item', value: item.name, inline: true },
-          { name: 'Cantidad', value: quantity.toLocaleString('es-ES'), inline: true },
-          { name: 'Precio unitario', value: money.format(item.price), inline: true },
-          { name: 'Total', value: `**${money.format(total)}**`, inline: true }
+        .setColor(0x00e640)
+        .setTitle('🛒 Nueva venta')
+        .setDescription(
+          `**Usuario:** <@${interaction.user.id}>\n` +
+          `**Discord ID:** \`${interaction.user.id}\`\n` +
+          `**Total:** **${money.format(total)}**\n\n` +
+          `**Items**\n${item.name} x${quantity.toLocaleString('es-ES')} (${money.format(total)})`
         )
         .setTimestamp(new Date(sale.created_at))
-        .setFooter({ text: `Venta ${sale.id}` });
+        .setFooter({ text: `Sistema de Ventas · ${sale.id}` });
       const cancel = new ButtonBuilder()
         .setCustomId(`sale:cancel:${sale.id}`)
         .setLabel('Cancelar mi venta')
