@@ -77,6 +77,10 @@ function panelPayload() {
     new ButtonBuilder()
       .setCustomId('sale:combo')
       .setLabel('Crear combo')
+      .setStyle(ButtonStyle.Primary),
+    new ButtonBuilder()
+      .setCustomId('sale:combo-sandwich-water')
+      .setLabel('Combo Sandwich + Agua')
       .setStyle(ButtonStyle.Primary)
   );
   itemRows.push(new ActionRowBuilder().addComponents(
@@ -285,6 +289,48 @@ client.on('interactionCreate', async (interaction) => {
       await interaction.reply({
         content: '**Selecciona los dos artículos del combo:**',
         components: [new ActionRowBuilder().addComponents(select)],
+        flags: MessageFlags.Ephemeral
+      });
+      return;
+    }
+
+    if (interaction.isButton() && interaction.customId === 'sale:combo-sandwich-water') {
+      if (await denyIfUnauthorized(interaction)) return;
+      const modal = new ModalBuilder()
+        .setCustomId('sale:combo-sandwich-water-quantity')
+        .setTitle('Combo Sandwich + Agua');
+      const quantity = new TextInputBuilder()
+        .setCustomId('quantity')
+        .setLabel('Cantidad de cada artículo')
+        .setPlaceholder('Ejemplo: 10 añade 10 Sandwich y 10 Agua')
+        .setStyle(TextInputStyle.Short)
+        .setRequired(true)
+        .setMinLength(1)
+        .setMaxLength(7);
+      modal.addComponents(new ActionRowBuilder().addComponents(quantity));
+      await interaction.showModal(modal);
+      return;
+    }
+
+    if (interaction.isModalSubmit() && interaction.customId === 'sale:combo-sandwich-water-quantity') {
+      if (await denyIfUnauthorized(interaction)) return;
+      const rawQuantity = interaction.fields.getTextInputValue('quantity').trim();
+      const quantity = Number(rawQuantity);
+      if (!/^\d+$/.test(rawQuantity) || !Number.isSafeInteger(quantity) || quantity < 1 || quantity > 1000000) {
+        await interaction.reply({ content: 'Introduce una cantidad entera entre 1 y 1.000.000.', flags: MessageFlags.Ephemeral });
+        return;
+      }
+      const key = cartKey(interaction);
+      const cart = carts.get(key) || new Map();
+      for (const itemId of ['sandwich', 'agua']) {
+        const item = ITEM_BY_ID.get(itemId);
+        const previous = cart.get(itemId);
+        cart.set(itemId, { item, quantity: (previous?.quantity || 0) + quantity });
+      }
+      carts.set(key, cart);
+      const comboTotal = (ITEM_BY_ID.get('sandwich').price + ITEM_BY_ID.get('agua').price) * quantity;
+      await interaction.reply({
+        content: `**Combo añadido:** ${quantity.toLocaleString('es-ES')} Sandwich + ${quantity.toLocaleString('es-ES')} Agua (${money.format(comboTotal)})\n\n**Tu selección:**\n${cartText(cart)}\n\nPulsa **Registrar venta** en el panel cuando termines.`,
         flags: MessageFlags.Ephemeral
       });
       return;

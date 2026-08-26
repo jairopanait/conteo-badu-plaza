@@ -4,6 +4,8 @@ Bot de Discord con un panel interactivo de botones para registrar ventas. El usu
 
 El botón **Crear combo** permite elegir exactamente dos artículos y una cantidad diferente para cada uno, calculando automáticamente el total de ambos.
 
+El botón **Combo Sandwich + Agua** añade rápidamente la misma cantidad de ambos artículos.
+
 El comando `/resumen periodo usuario` está limitado al rol de supervisión configurado. Resume el día, la semana o el mes actual de la persona elegida, con cantidades por artículo, número de ventas y dinero total.
 
 ## Requisitos
