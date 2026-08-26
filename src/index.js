@@ -10,6 +10,7 @@ const {
   MessageFlags,
   ModalBuilder,
   SlashCommandBuilder,
+  StringSelectMenuBuilder,
   TextInputBuilder,
   TextInputStyle
 } = require('discord.js');
@@ -75,7 +76,7 @@ function panelPayload() {
   itemRows[itemRows.length - 1].addComponents(
     new ButtonBuilder()
       .setCustomId('sale:combo')
-      .setLabel('Combo Sandwich + Agua')
+      .setLabel('Crear combo')
       .setStyle(ButtonStyle.Primary)
   );
   itemRows.push(new ActionRowBuilder().addComponents(
@@ -271,41 +272,80 @@ client.on('interactionCreate', async (interaction) => {
 
     if (interaction.isButton() && interaction.customId === 'sale:combo') {
       if (await denyIfUnauthorized(interaction)) return;
+      const select = new StringSelectMenuBuilder()
+        .setCustomId('sale:combo-items')
+        .setPlaceholder('Elige exactamente 2 artículos')
+        .setMinValues(2)
+        .setMaxValues(2)
+        .addOptions(ITEMS.map((item) => ({
+          label: item.name,
+          description: money.format(item.price),
+          value: item.id
+        })));
+      await interaction.reply({
+        content: '**Selecciona los dos artículos del combo:**',
+        components: [new ActionRowBuilder().addComponents(select)],
+        flags: MessageFlags.Ephemeral
+      });
+      return;
+    }
+
+    if (interaction.isStringSelectMenu() && interaction.customId === 'sale:combo-items') {
+      if (await denyIfUnauthorized(interaction)) return;
+      const [firstId, secondId] = interaction.values;
+      const first = ITEM_BY_ID.get(firstId);
+      const second = ITEM_BY_ID.get(secondId);
+      if (!first || !second) {
+        await interaction.reply({ content: 'Los artículos seleccionados no son válidos.', flags: MessageFlags.Ephemeral });
+        return;
+      }
       const modal = new ModalBuilder()
-        .setCustomId('sale:combo-quantity')
-        .setTitle('Combo Sandwich + Agua');
-      const quantity = new TextInputBuilder()
-        .setCustomId('quantity')
-        .setLabel('Cantidad de cada artículo')
-        .setPlaceholder('Ejemplo: 10 añade 10 Sandwich y 10 Agua')
+        .setCustomId(`sale:combo-quantities:${firstId}:${secondId}`)
+        .setTitle('Cantidades del combo');
+      const firstQuantity = new TextInputBuilder()
+        .setCustomId('first_quantity')
+        .setLabel(`Cantidad de ${first.name}`.slice(0, 45))
         .setStyle(TextInputStyle.Short)
         .setRequired(true)
-        .setMinLength(1)
         .setMaxLength(7);
-      modal.addComponents(new ActionRowBuilder().addComponents(quantity));
+      const secondQuantity = new TextInputBuilder()
+        .setCustomId('second_quantity')
+        .setLabel(`Cantidad de ${second.name}`.slice(0, 45))
+        .setStyle(TextInputStyle.Short)
+        .setRequired(true)
+        .setMaxLength(7);
+      modal.addComponents(
+        new ActionRowBuilder().addComponents(firstQuantity),
+        new ActionRowBuilder().addComponents(secondQuantity)
+      );
       await interaction.showModal(modal);
       return;
     }
 
-    if (interaction.isModalSubmit() && interaction.customId === 'sale:combo-quantity') {
+    if (interaction.isModalSubmit() && interaction.customId.startsWith('sale:combo-quantities:')) {
       if (await denyIfUnauthorized(interaction)) return;
-      const rawQuantity = interaction.fields.getTextInputValue('quantity').trim();
-      const quantity = Number(rawQuantity);
-      if (!/^\d+$/.test(rawQuantity) || !Number.isSafeInteger(quantity) || quantity < 1 || quantity > 1000000) {
-        await interaction.reply({ content: 'Introduce una cantidad entera entre 1 y 1.000.000.', flags: MessageFlags.Ephemeral });
+      const [firstId, secondId] = interaction.customId.slice('sale:combo-quantities:'.length).split(':');
+      const first = ITEM_BY_ID.get(firstId);
+      const second = ITEM_BY_ID.get(secondId);
+      const firstRaw = interaction.fields.getTextInputValue('first_quantity').trim();
+      const secondRaw = interaction.fields.getTextInputValue('second_quantity').trim();
+      const firstAmount = Number(firstRaw);
+      const secondAmount = Number(secondRaw);
+      const valid = (raw, amount) => /^\d+$/.test(raw) && Number.isSafeInteger(amount) && amount >= 1 && amount <= 1000000;
+      if (!first || !second || !valid(firstRaw, firstAmount) || !valid(secondRaw, secondAmount)) {
+        await interaction.reply({ content: 'Introduce cantidades enteras entre 1 y 1.000.000.', flags: MessageFlags.Ephemeral });
         return;
       }
       const key = cartKey(interaction);
       const cart = carts.get(key) || new Map();
-      for (const itemId of ['sandwich', 'agua']) {
-        const item = ITEM_BY_ID.get(itemId);
-        const previous = cart.get(itemId);
-        cart.set(itemId, { item, quantity: (previous?.quantity || 0) + quantity });
+      for (const [item, amount] of [[first, firstAmount], [second, secondAmount]]) {
+        const previous = cart.get(item.id);
+        cart.set(item.id, { item, quantity: (previous?.quantity || 0) + amount });
       }
       carts.set(key, cart);
-      const comboTotal = (ITEM_BY_ID.get('sandwich').price + ITEM_BY_ID.get('agua').price) * quantity;
+      const comboTotal = first.price * firstAmount + second.price * secondAmount;
       await interaction.reply({
-        content: `**Combo añadido:** ${quantity} Sandwich + ${quantity} Agua (${money.format(comboTotal)})\n\n**Tu selección:**\n${cartText(cart)}\n\nAñade más artículos o pulsa **Registrar venta** en el panel.`,
+        content: `**Combo añadido:** ${first.name} x${firstAmount.toLocaleString('es-ES')} + ${second.name} x${secondAmount.toLocaleString('es-ES')} (${money.format(comboTotal)})\n\n**Tu selección:**\n${cartText(cart)}\n\nPulsa **Registrar venta** en el panel cuando termines.`,
         flags: MessageFlags.Ephemeral
       });
       return;
