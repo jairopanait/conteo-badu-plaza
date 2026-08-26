@@ -72,6 +72,12 @@ function panelPayload() {
       )
     ));
   }
+  itemRows[itemRows.length - 1].addComponents(
+    new ButtonBuilder()
+      .setCustomId('sale:combo')
+      .setLabel('Combo Sandwich + Agua')
+      .setStyle(ButtonStyle.Primary)
+  );
   itemRows.push(new ActionRowBuilder().addComponents(
     new ButtonBuilder()
       .setCustomId('sale:checkout')
@@ -260,6 +266,47 @@ client.on('interactionCreate', async (interaction) => {
         .setMaxLength(7);
       modal.addComponents(new ActionRowBuilder().addComponents(quantity));
       await interaction.showModal(modal);
+      return;
+    }
+
+    if (interaction.isButton() && interaction.customId === 'sale:combo') {
+      if (await denyIfUnauthorized(interaction)) return;
+      const ten = new ButtonBuilder()
+        .setCustomId('sale:combo:10')
+        .setLabel('10 Sandwich + 10 Agua')
+        .setStyle(ButtonStyle.Primary);
+      const twenty = new ButtonBuilder()
+        .setCustomId('sale:combo:20')
+        .setLabel('20 Sandwich + 20 Agua')
+        .setStyle(ButtonStyle.Primary);
+      await interaction.reply({
+        content: '**¿De cuánto era el combo?**',
+        components: [new ActionRowBuilder().addComponents(ten, twenty)],
+        flags: MessageFlags.Ephemeral
+      });
+      return;
+    }
+
+    if (interaction.isButton() && interaction.customId.startsWith('sale:combo:')) {
+      if (await denyIfUnauthorized(interaction)) return;
+      const quantity = Number(interaction.customId.slice('sale:combo:'.length));
+      if (![10, 20].includes(quantity)) {
+        await interaction.reply({ content: 'Combo no válido.', flags: MessageFlags.Ephemeral });
+        return;
+      }
+      const key = cartKey(interaction);
+      const cart = carts.get(key) || new Map();
+      for (const itemId of ['sandwich', 'agua']) {
+        const item = ITEM_BY_ID.get(itemId);
+        const previous = cart.get(itemId);
+        cart.set(itemId, { item, quantity: (previous?.quantity || 0) + quantity });
+      }
+      carts.set(key, cart);
+      const comboTotal = (ITEM_BY_ID.get('sandwich').price + ITEM_BY_ID.get('agua').price) * quantity;
+      await interaction.update({
+        content: `**Combo añadido:** ${quantity} Sandwich + ${quantity} Agua (${money.format(comboTotal)})\n\n**Tu selección:**\n${cartText(cart)}\n\nAñade más artículos o pulsa **Registrar venta** en el panel.`,
+        components: []
+      });
       return;
     }
 
