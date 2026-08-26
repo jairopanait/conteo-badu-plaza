@@ -48,6 +48,17 @@ const money = new Intl.NumberFormat('en-US', {
   currency: 'USD',
   maximumFractionDigits: 0
 });
+const carts = new Map();
+
+function cartKey(interaction) {
+  return `${interaction.guildId}:${interaction.user.id}`;
+}
+
+function cartText(cart) {
+  return [...cart.values()]
+    .map(({ item, quantity }) => `${item.name} x${quantity.toLocaleString('es-ES')} (${money.format(item.price * quantity)})`)
+    .join('\n');
+}
 
 function panelPayload() {
   const itemRows = [];
@@ -61,8 +72,18 @@ function panelPayload() {
       )
     ));
   }
+  itemRows.push(new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId('sale:checkout')
+      .setLabel('Registrar venta')
+      .setStyle(ButtonStyle.Success),
+    new ButtonBuilder()
+      .setCustomId('sale:clear')
+      .setLabel('Vaciar selección')
+      .setStyle(ButtonStyle.Danger)
+  ));
   return {
-    content: '**Categoría: Ventas**\nSelecciona el artículo vendido:',
+    content: '**Categoría: Ventas**\nAñade uno o varios artículos y después pulsa **Registrar venta**:',
     embeds: [],
     components: itemRows
   };
@@ -180,7 +201,7 @@ client.on('interactionCreate', async (interaction) => {
       const { start, end } = periodRange(period);
       const { data: sales, error } = await supabase
         .from('sales')
-        .select('item_id,item_name,quantity,total')
+        .select('id,item_id,item_name,quantity,total,discord_message_id')
         .eq('guild_id', interaction.guildId)
         .eq('seller_discord_id', target.id)
         .eq('status', 'active')
@@ -209,7 +230,7 @@ client.on('interactionCreate', async (interaction) => {
         .setDescription(`**Usuario:** <@${target.id}>\n**Discord ID:** \`${target.id}\``)
         .addFields(
           { name: 'Total de artículos', value: totalUnits.toLocaleString('es-ES'), inline: true },
-          { name: 'Número de ventas', value: sales.length.toLocaleString('es-ES'), inline: true },
+          { name: 'Número de ventas', value: new Set(sales.map((sale) => sale.discord_message_id || sale.id)).size.toLocaleString('es-ES'), inline: true },
           { name: 'Dinero total', value: `**${money.format(totalMoney)}**`, inline: true },
           { name: 'Artículos vendidos', value: itemLines }
         )
@@ -242,6 +263,63 @@ client.on('interactionCreate', async (interaction) => {
       return;
     }
 
+    if (interaction.isButton() && interaction.customId === 'sale:clear') {
+      if (await denyIfUnauthorized(interaction)) return;
+      carts.delete(cartKey(interaction));
+      await interaction.reply({ content: 'Tu selección se ha vaciado.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+
+    if (interaction.isButton() && interaction.customId === 'sale:checkout') {
+      if (await denyIfUnauthorized(interaction)) return;
+      const key = cartKey(interaction);
+      const cart = carts.get(key);
+      if (!cart?.size) {
+        await interaction.reply({ content: 'Primero selecciona al menos un artículo.', flags: MessageFlags.Ephemeral });
+        return;
+      }
+      await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+      const entries = [...cart.values()];
+      const grandTotal = entries.reduce((sum, entry) => sum + entry.item.price * entry.quantity, 0);
+      const records = entries.map(({ item, quantity }) => ({
+        guild_id: interaction.guildId,
+        seller_discord_id: interaction.user.id,
+        seller_name: interaction.user.globalName || interaction.user.username,
+        item_id: item.id,
+        item_name: item.name,
+        unit_price: item.price,
+        quantity,
+        total: item.price * quantity
+      }));
+      const { data: sales, error } = await supabase.from('sales').insert(records).select('id,created_at');
+      if (error) throw error;
+      const firstSale = sales[0];
+      const embed = new EmbedBuilder()
+        .setColor(0xf4a7c1)
+        .setTitle('🛒 Nueva venta')
+        .setDescription(
+          `**Usuario:** <@${interaction.user.id}>\n` +
+          `**Discord ID:** \`${interaction.user.id}\`\n` +
+          `**Total:** **${money.format(grandTotal)}**\n\n` +
+          `**Items**\n${cartText(cart)}`
+        )
+        .setTimestamp(new Date(firstSale.created_at))
+        .setFooter({ text: `Sistema de Ventas · ${firstSale.id}` });
+      const salesChannel = await client.channels.fetch(process.env.SALES_CHANNEL_ID);
+      const message = await salesChannel.send({ embeds: [embed], components: [] });
+      await supabase.from('sales').update({ discord_message_id: message.id }).in('id', sales.map((sale) => sale.id));
+      const cancel = new ButtonBuilder()
+        .setCustomId(`sale:cancel:${firstSale.id}`)
+        .setLabel('Cancelar mi venta')
+        .setStyle(ButtonStyle.Danger);
+      carts.delete(key);
+      await interaction.editReply({
+        content: `Venta registrada correctamente: **${money.format(grandTotal)}**. Solo tú puedes ver este botón.`,
+        components: [new ActionRowBuilder().addComponents(cancel)]
+      });
+      return;
+    }
+
     if (interaction.isModalSubmit() && interaction.customId.startsWith('sale:quantity:')) {
       if (await denyIfUnauthorized(interaction)) return;
       const itemId = interaction.customId.slice('sale:quantity:'.length);
@@ -254,48 +332,15 @@ client.on('interactionCreate', async (interaction) => {
         return;
       }
 
-      await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-      const total = item.price * quantity;
-      const { data: sale, error } = await supabase
-        .from('sales')
-        .insert({
-          guild_id: interaction.guildId,
-          seller_discord_id: interaction.user.id,
-          seller_name: interaction.user.globalName || interaction.user.username,
-          item_id: item.id,
-          item_name: item.name,
-          unit_price: item.price,
-          quantity,
-          total
-        })
-        .select('id, created_at')
-        .single();
-      if (error) throw error;
-
-      const embed = new EmbedBuilder()
-        .setColor(0xf4a7c1)
-        .setTitle('🛒 Nueva venta')
-        .setDescription(
-          `**Usuario:** <@${interaction.user.id}>\n` +
-          `**Discord ID:** \`${interaction.user.id}\`\n` +
-          `**Total:** **${money.format(total)}**\n\n` +
-          `**Items**\n${item.name} x${quantity.toLocaleString('es-ES')} (${money.format(total)})`
-        )
-        .setTimestamp(new Date(sale.created_at))
-        .setFooter({ text: `Sistema de Ventas · ${sale.id}` });
-      const cancel = new ButtonBuilder()
-        .setCustomId(`sale:cancel:${sale.id}`)
-        .setLabel('Cancelar mi venta')
-        .setStyle(ButtonStyle.Danger);
-      const salesChannel = await client.channels.fetch(process.env.SALES_CHANNEL_ID);
-      const message = await salesChannel.send({
-        embeds: [embed],
-        components: []
-      });
-      await supabase.from('sales').update({ discord_message_id: message.id }).eq('id', sale.id);
-      await interaction.editReply({
-        content: `Venta registrada correctamente: **${money.format(total)}**. Solo tú puedes ver este botón.`,
-        components: [new ActionRowBuilder().addComponents(cancel)]
+      const key = cartKey(interaction);
+      const cart = carts.get(key) || new Map();
+      const previous = cart.get(item.id);
+      cart.set(item.id, { item, quantity: (previous?.quantity || 0) + quantity });
+      carts.set(key, cart);
+      await interaction.reply({
+        content: `**Añadido a tu venta:** ${item.name} x${quantity.toLocaleString('es-ES')}\n\n**Tu selección:**\n${cartText(cart)}\n\nAñade más artículos o pulsa **Registrar venta** en el panel.`,
+        components: [],
+        flags: MessageFlags.Ephemeral
       });
       return;
     }
@@ -316,11 +361,14 @@ client.on('interactionCreate', async (interaction) => {
         return;
       }
 
-      const { error: updateError } = await supabase
+      let updateQuery = supabase
         .from('sales')
         .update({ status: 'cancelled', cancelled_at: new Date().toISOString() })
-        .eq('id', saleId)
         .eq('seller_discord_id', interaction.user.id);
+      updateQuery = sale.discord_message_id
+        ? updateQuery.eq('discord_message_id', sale.discord_message_id)
+        : updateQuery.eq('id', saleId);
+      const { error: updateError } = await updateQuery;
       if (updateError) throw updateError;
 
       if (sale.discord_message_id) {

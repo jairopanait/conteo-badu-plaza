@@ -1,6 +1,6 @@
 # Conteo Badu Plaza
 
-Bot de Discord con un panel interactivo de botones para registrar ventas. El usuario pulsa un item, introduce la cantidad y el bot publica el total junto con su ID de Discord. Solo funciona para miembros con el rol configurado y permite que el vendedor cancele su propia venta.
+Bot de Discord con un panel interactivo de botones para registrar ventas. El usuario puede añadir varios items con sus cantidades a una selección privada y registrarlos juntos como una única venta. El bot publica el total junto con su ID de Discord. Solo funciona para miembros con el rol configurado y permite que el vendedor cancele su propia venta.
 
 El comando `/resumen periodo usuario` está limitado al rol de supervisión configurado. Resume el día, la semana o el mes actual de la persona elegida, con cantidades por artículo, número de ventas y dinero total.
 
