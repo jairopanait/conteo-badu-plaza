@@ -12,6 +12,8 @@ Cada lunes a las 00:00 (Europe/Madrid), el bot publica automáticamente en el ca
 
 El panel fijado de empleados permite solicitar rango indicando el Nombre IC. Las solicitudes se revisan en un canal privado y solo el rol de administración puede aceptarlas. Al aprobar, se asignan automáticamente los roles configurados. `/empleados` muestra de forma privada únicamente Nombre IC, usuario de Discord y User ID de cada persona, incluso si ya abandonó el servidor.
 
+Al arrancar, el bot importa sin duplicados a los miembros existentes que ya tienen el rol de empleado, usando su apodo visible en el servidor como Nombre IC. Esta función requiere activar **Server Members Intent** en Discord Developer Portal.
+
 ## Requisitos
 
 - Node.js 20 o posterior

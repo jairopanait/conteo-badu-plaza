@@ -33,7 +33,7 @@ for (const name of REQUIRED_ENV) {
   if (!process.env[name]) throw new Error(`Falta la variable de entorno ${name}`);
 }
 
-const client = new Client({ intents: [GatewayIntentBits.Guilds] });
+const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers] });
 const PANEL_CHANNEL_ID = '1541797314581241916';
 const PREVIOUS_PANEL_CHANNEL_ID = '1541196954837581946';
 const WEEKLY_REPORT_CHANNEL_ID = '1543062522687393924';
@@ -217,6 +217,40 @@ async function fetchAllEmployeeRequests() {
   return records;
 }
 
+async function importExistingEmployees() {
+  const guild = await client.guilds.fetch(process.env.DISCORD_GUILD_ID);
+  const members = await guild.members.fetch();
+  const existing = await fetchAllEmployeeRequests();
+  const registeredIds = new Set(existing.map((record) => record.discord_id));
+  const employees = members.filter((member) =>
+    !member.user.bot &&
+    member.roles.cache.has(process.env.AUTHORIZED_ROLE_ID) &&
+    !registeredIds.has(member.id)
+  );
+  const records = employees.map((member) => {
+    const currentRoles = member.roles.cache
+      .filter((role) => role.id !== guild.id)
+      .map((role) => role.id);
+    return {
+      guild_id: guild.id,
+      discord_id: member.id,
+      discord_username: member.user.username,
+      ic_name: member.displayName,
+      status: 'approved',
+      roles_at_request: currentRoles,
+      granted_roles: EMPLOYEE_GRANTED_ROLE_IDS.filter((roleId) => member.roles.cache.has(roleId)),
+      roles_after_approval: currentRoles,
+      reviewed_by: 'system_import',
+      reviewed_at: new Date().toISOString()
+    };
+  });
+  for (let index = 0; index < records.length; index += 500) {
+    const { error } = await supabase.from('employee_requests').insert(records.slice(index, index + 500));
+    if (error) throw error;
+  }
+  console.log(`Empleados existentes importados: ${records.length}`);
+}
+
 function periodRange(period) {
   const now = DateTime.now().setZone(TIMEZONE);
   const starts = {
@@ -363,6 +397,11 @@ client.once('ready', async () => {
     await runPreviousWeekReport();
   } catch (error) {
     console.error('No se pudo enviar el informe semanal pendiente:', error);
+  }
+  try {
+    await importExistingEmployees();
+  } catch (error) {
+    console.error('No se pudieron importar los empleados existentes:', error);
   }
   scheduleWeeklyReport();
 });
