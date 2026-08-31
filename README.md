@@ -8,6 +8,8 @@ El botón **Combo Sandwich + Agua** añade rápidamente la misma cantidad de amb
 
 El comando `/resumen periodo usuario` está limitado al rol de supervisión configurado. Resume el día, la semana o el mes actual de la persona elegida, con cantidades por artículo, número de ventas y dinero total.
 
+Cada lunes a las 00:00 (Europe/Madrid), el bot publica automáticamente en el canal configurado el resumen de la semana anterior por vendedor: nombre, Discord ID, ventas, ítems y dinero total. Las ventas canceladas no se incluyen.
+
 ## Requisitos
 
 - Node.js 20 o posterior

@@ -36,6 +36,7 @@ for (const name of REQUIRED_ENV) {
 const client = new Client({ intents: [GatewayIntentBits.Guilds] });
 const PANEL_CHANNEL_ID = '1541797314581241916';
 const PREVIOUS_PANEL_CHANNEL_ID = '1541196954837581946';
+const WEEKLY_REPORT_CHANNEL_ID = '1543062522687393924';
 const SUMMARY_ROLE_ID = process.env.SUMMARY_ROLE_ID || '1541197720197406760';
 const TIMEZONE = process.env.TIMEZONE || 'Europe/Madrid';
 const supabase = createClient(
@@ -180,6 +181,110 @@ function periodRange(period) {
   return { start, end };
 }
 
+async function fetchSalesBetween(start, end) {
+  const allSales = [];
+  const pageSize = 1000;
+  for (let from = 0; ; from += pageSize) {
+    const { data, error } = await supabase
+      .from('sales')
+      .select('id,seller_discord_id,seller_name,quantity,total,discord_message_id')
+      .eq('guild_id', process.env.DISCORD_GUILD_ID)
+      .eq('status', 'active')
+      .gte('created_at', start.toUTC().toISO())
+      .lt('created_at', end.toUTC().toISO())
+      .range(from, from + pageSize - 1);
+    if (error) throw error;
+    allSales.push(...data);
+    if (data.length < pageSize) break;
+  }
+  return allSales;
+}
+
+async function sendWeeklyReport(start, end) {
+  const channel = await client.channels.fetch(WEEKLY_REPORT_CHANNEL_ID);
+  if (!channel?.isTextBased()) throw new Error('El canal del informe semanal no es un canal de texto');
+
+  const marker = `WEEKLY_REPORT:${start.toISODate()}`;
+  const recent = await channel.messages.fetch({ limit: 100 });
+  const alreadySent = recent.some((message) =>
+    message.author.id === client.user.id &&
+    message.embeds.some((embed) => embed.footer?.text?.includes(marker))
+  );
+  if (alreadySent) return;
+
+  const sales = await fetchSalesBetween(start, end);
+  const sellers = new Map();
+  for (const sale of sales) {
+    const current = sellers.get(sale.seller_discord_id) || {
+      id: sale.seller_discord_id,
+      name: sale.seller_name,
+      items: 0,
+      money: 0,
+      saleIds: new Set()
+    };
+    current.name = sale.seller_name || current.name;
+    current.items += sale.quantity;
+    current.money += Number(sale.total);
+    current.saleIds.add(sale.discord_message_id || sale.id);
+    sellers.set(sale.seller_discord_id, current);
+  }
+
+  const ranked = [...sellers.values()].sort((a, b) => b.money - a.money);
+  const embeds = [];
+  const chunks = ranked.length ? Array.from({ length: Math.ceil(ranked.length / 20) }, (_, index) =>
+    ranked.slice(index * 20, index * 20 + 20)
+  ) : [[]];
+
+  for (let index = 0; index < chunks.length; index += 1) {
+    const embed = new EmbedBuilder()
+      .setColor(0xf4a7c1)
+      .setTitle(index === 0 ? '📊 Resumen semanal de ventas' : '📊 Resumen semanal de ventas · continuación')
+      .setFooter({ text: `Sistema de Ventas · ${marker}` })
+      .setTimestamp();
+    if (index === 0) {
+      embed.setDescription(`Periodo: **${start.toFormat('dd/MM/yyyy')} – ${end.minus({ days: 1 }).toFormat('dd/MM/yyyy')}**`);
+    }
+    if (!chunks[index].length) {
+      embed.addFields({ name: 'Sin ventas', value: 'No hubo ventas activas durante esta semana.' });
+    } else {
+      embed.addFields(chunks[index].map((seller) => ({
+        name: seller.name || 'Usuario desconocido',
+        value:
+          `Discord ID: \`${seller.id}\`\n` +
+          `Ventas: **${seller.saleIds.size.toLocaleString('es-ES')}** · ` +
+          `Ítems: **${seller.items.toLocaleString('es-ES')}** · ` +
+          `Total: **${money.format(seller.money)}**`
+      })));
+    }
+    embeds.push(embed);
+  }
+
+  for (let index = 0; index < embeds.length; index += 10) {
+    await channel.send({ embeds: embeds.slice(index, index + 10) });
+  }
+  console.log(`Informe semanal enviado: ${start.toISODate()}`);
+}
+
+async function runPreviousWeekReport() {
+  const thisWeek = DateTime.now().setZone(TIMEZONE).startOf('week');
+  await sendWeeklyReport(thisWeek.minus({ weeks: 1 }), thisWeek);
+}
+
+function scheduleWeeklyReport() {
+  const now = DateTime.now().setZone(TIMEZONE);
+  const nextMonday = now.startOf('week').plus({ weeks: 1 });
+  const delay = Math.max(1000, nextMonday.toMillis() - now.toMillis());
+  setTimeout(async () => {
+    try {
+      await runPreviousWeekReport();
+    } catch (error) {
+      console.error('No se pudo enviar el informe semanal:', error);
+    } finally {
+      scheduleWeeklyReport();
+    }
+  }, delay);
+}
+
 async function denyIfUnauthorized(interaction) {
   if (hasAuthorizedRole(interaction)) return false;
   await interaction.reply({ content: 'No tienes el rol autorizado para registrar ventas.', ephemeral: true });
@@ -197,6 +302,12 @@ client.once('ready', async () => {
   } catch (error) {
     console.error('No se pudo preparar el panel:', error);
   }
+  try {
+    await runPreviousWeekReport();
+  } catch (error) {
+    console.error('No se pudo enviar el informe semanal pendiente:', error);
+  }
+  scheduleWeeklyReport();
 });
 
 client.on('interactionCreate', async (interaction) => {
