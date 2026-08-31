@@ -2,6 +2,7 @@ require('dotenv').config();
 
 const {
   ActionRowBuilder,
+  AttachmentBuilder,
   ButtonBuilder,
   ButtonStyle,
   Client,
@@ -37,6 +38,10 @@ const client = new Client({ intents: [GatewayIntentBits.Guilds] });
 const PANEL_CHANNEL_ID = '1541797314581241916';
 const PREVIOUS_PANEL_CHANNEL_ID = '1541196954837581946';
 const WEEKLY_REPORT_CHANNEL_ID = '1543062522687393924';
+const EMPLOYEE_PANEL_CHANNEL_ID = '1541193810267344997';
+const EMPLOYEE_ADMIN_CHANNEL_ID = '1544111826193752175';
+const EMPLOYEE_MANAGER_ROLE_ID = '1541197720197406760';
+const EMPLOYEE_GRANTED_ROLE_IDS = ['1541197856793305138', '1541198506205913208'];
 const SUMMARY_ROLE_ID = process.env.SUMMARY_ROLE_ID || '1541197720197406760';
 const TIMEZONE = process.env.TIMEZONE || 'Europe/Madrid';
 const supabase = createClient(
@@ -164,6 +169,79 @@ const summaryCommand = new SlashCommandBuilder()
       .setDescription('Persona cuyo resumen quieres consultar')
       .setRequired(true)
   );
+
+const employeesCommand = new SlashCommandBuilder()
+  .setName('empleados')
+  .setDescription('Descarga el registro histórico de solicitudes de empleados');
+
+function employeePanelPayload() {
+  const button = new ButtonBuilder()
+    .setCustomId('employee:request')
+    .setLabel('Solicitar rango')
+    .setStyle(ButtonStyle.Primary);
+  const embed = new EmbedBuilder()
+    .setColor(0xf4a7c1)
+    .setTitle('👤 Solicitud de rango de empleado')
+    .setDescription('Pulsa el botón para solicitar tu rango. Se te pedirá tu **Nombre IC**.')
+    .setFooter({ text: 'EMPLOYEE_REQUEST_PANEL_V1' });
+  return { embeds: [embed], components: [new ActionRowBuilder().addComponents(button)] };
+}
+
+async function ensureEmployeePanel() {
+  const channel = await client.channels.fetch(EMPLOYEE_PANEL_CHANNEL_ID);
+  if (!channel?.isTextBased()) throw new Error('El canal del panel de empleados no es de texto');
+  const recent = await channel.messages.fetch({ limit: 100 });
+  let panel = recent.find((message) =>
+    message.author.id === client.user.id &&
+    message.embeds.some((embed) => embed.footer?.text === 'EMPLOYEE_REQUEST_PANEL_V1')
+  );
+  if (panel) await panel.edit(employeePanelPayload());
+  else panel = await channel.send(employeePanelPayload());
+  if (!panel.pinned) {
+    await panel.pin().catch((error) => console.error('No se pudo fijar el panel de empleados:', error));
+  }
+}
+
+async function fetchAllEmployeeRequests() {
+  const records = [];
+  const pageSize = 1000;
+  for (let from = 0; ; from += pageSize) {
+    const { data, error } = await supabase
+      .from('employee_requests')
+      .select('*')
+      .order('requested_at', { ascending: false })
+      .range(from, from + pageSize - 1);
+    if (error) throw error;
+    records.push(...data);
+    if (data.length < pageSize) break;
+  }
+  return records;
+}
+
+function csvCell(value) {
+  const text = Array.isArray(value) ? value.join(' | ') : String(value ?? '');
+  return `"${text.replaceAll('"', '""')}"`;
+}
+
+function employeeCsv(records) {
+  const headers = [
+    'solicitud_id', 'discord_id', 'usuario_discord', 'nombre_ic', 'estado',
+    'roles_al_solicitar', 'roles_otorgados', 'fecha_solicitud', 'aprobado_por', 'fecha_aprobacion'
+  ];
+  const rows = records.map((record) => [
+    record.id,
+    record.discord_id,
+    record.discord_username,
+    record.ic_name,
+    record.status,
+    record.roles_at_request,
+    record.granted_roles,
+    record.requested_at,
+    record.reviewed_by,
+    record.reviewed_at
+  ].map(csvCell).join(','));
+  return `\uFEFF${headers.join(',')}\n${rows.join('\n')}`;
+}
 
 function periodRange(period) {
   const now = DateTime.now().setZone(TIMEZONE);
@@ -294,11 +372,16 @@ async function denyIfUnauthorized(interaction) {
 client.once('ready', async () => {
   console.log(`Bot conectado como ${client.user.tag}`);
   try {
-    await client.application.commands.set([summaryCommand.toJSON()], process.env.DISCORD_GUILD_ID);
-    console.log('Comando /resumen preparado');
+    await client.application.commands.set(
+      [summaryCommand.toJSON(), employeesCommand.toJSON()],
+      process.env.DISCORD_GUILD_ID
+    );
+    console.log('Comandos /resumen y /empleados preparados');
     await removePreviousPanel();
     await ensurePanel();
     console.log('Panel de ventas preparado');
+    await ensureEmployeePanel();
+    console.log('Panel de solicitudes de empleados preparado');
   } catch (error) {
     console.error('No se pudo preparar el panel:', error);
   }
@@ -312,6 +395,137 @@ client.once('ready', async () => {
 
 client.on('interactionCreate', async (interaction) => {
   try {
+    if (interaction.isChatInputCommand() && interaction.commandName === 'empleados') {
+      if (!hasSummaryRole(interaction)) {
+        await interaction.reply({ content: 'No tienes el rol autorizado para consultar empleados.', flags: MessageFlags.Ephemeral });
+        return;
+      }
+      await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+      const records = await fetchAllEmployeeRequests();
+      const attachment = new AttachmentBuilder(Buffer.from(employeeCsv(records), 'utf8'), {
+        name: `empleados-${DateTime.now().setZone(TIMEZONE).toFormat('yyyy-MM-dd')}.csv`
+      });
+      await interaction.editReply({
+        content: `Registro histórico: **${records.length.toLocaleString('es-ES')} solicitudes**.`,
+        files: [attachment]
+      });
+      return;
+    }
+
+    if (interaction.isButton() && interaction.customId === 'employee:request') {
+      const modal = new ModalBuilder()
+        .setCustomId('employee:request-modal')
+        .setTitle('Solicitar rango de empleado');
+      const icName = new TextInputBuilder()
+        .setCustomId('ic_name')
+        .setLabel('Nombre IC')
+        .setPlaceholder('Escribe tu nombre dentro del juego')
+        .setStyle(TextInputStyle.Short)
+        .setRequired(true)
+        .setMinLength(2)
+        .setMaxLength(50);
+      modal.addComponents(new ActionRowBuilder().addComponents(icName));
+      await interaction.showModal(modal);
+      return;
+    }
+
+    if (interaction.isModalSubmit() && interaction.customId === 'employee:request-modal') {
+      await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+      const icName = interaction.fields.getTextInputValue('ic_name').trim();
+      const roles = interaction.member.roles.cache
+        .filter((role) => role.id !== interaction.guildId)
+        .map((role) => role.id);
+      const { data: request, error } = await supabase
+        .from('employee_requests')
+        .insert({
+          guild_id: interaction.guildId,
+          discord_id: interaction.user.id,
+          discord_username: interaction.user.username,
+          ic_name: icName,
+          roles_at_request: roles
+        })
+        .select('*')
+        .single();
+      if (error) throw error;
+
+      const adminChannel = await client.channels.fetch(EMPLOYEE_ADMIN_CHANNEL_ID);
+      if (!adminChannel?.isTextBased()) throw new Error('El canal de administración no es de texto');
+      const approve = new ButtonBuilder()
+        .setCustomId(`employee:approve:${request.id}`)
+        .setLabel('Aceptar solicitud')
+        .setStyle(ButtonStyle.Success);
+      const embed = new EmbedBuilder()
+        .setColor(0xf4a7c1)
+        .setTitle('📋 Nueva solicitud de empleado')
+        .addFields(
+          { name: 'Usuario', value: `<@${interaction.user.id}>`, inline: true },
+          { name: 'Discord ID', value: `\`${interaction.user.id}\``, inline: true },
+          { name: 'Nombre IC', value: icName, inline: true },
+          { name: 'Roles actuales', value: roles.length ? roles.map((id) => `<@&${id}>`).join(' ') : 'Ninguno' }
+        )
+        .setTimestamp();
+      const adminMessage = await adminChannel.send({
+        embeds: [embed],
+        components: [new ActionRowBuilder().addComponents(approve)]
+      });
+      await supabase
+        .from('employee_requests')
+        .update({ request_message_id: adminMessage.id })
+        .eq('id', request.id);
+      await interaction.editReply('Tu solicitud se ha enviado correctamente a la administración.');
+      return;
+    }
+
+    if (interaction.isButton() && interaction.customId.startsWith('employee:approve:')) {
+      if (!interaction.inGuild() || !interaction.member.roles.cache.has(EMPLOYEE_MANAGER_ROLE_ID)) {
+        await interaction.reply({ content: 'No tienes el rol autorizado para aceptar solicitudes.', flags: MessageFlags.Ephemeral });
+        return;
+      }
+      await interaction.deferUpdate();
+      const requestId = interaction.customId.slice('employee:approve:'.length);
+      const { data: request, error } = await supabase
+        .from('employee_requests')
+        .select('*')
+        .eq('id', requestId)
+        .single();
+      if (error || !request) throw error || new Error('Solicitud no encontrada');
+      if (request.status === 'approved') {
+        await interaction.followUp({ content: 'Esta solicitud ya fue aceptada.', flags: MessageFlags.Ephemeral });
+        return;
+      }
+
+      const member = await interaction.guild.members.fetch(request.discord_id).catch(() => null);
+      if (!member) {
+        await interaction.followUp({
+          content: 'La solicitud queda registrada, pero el usuario ya no está en el servidor y no se le pueden asignar roles.',
+          flags: MessageFlags.Ephemeral
+        });
+        return;
+      }
+      await member.roles.add(EMPLOYEE_GRANTED_ROLE_IDS, `Solicitud aceptada por ${interaction.user.username}`);
+      const rolesAfterApproval = member.roles.cache
+        .filter((role) => role.id !== interaction.guildId)
+        .map((role) => role.id);
+      const { error: updateError } = await supabase
+        .from('employee_requests')
+        .update({
+          status: 'approved',
+          granted_roles: EMPLOYEE_GRANTED_ROLE_IDS,
+          roles_after_approval: rolesAfterApproval,
+          reviewed_by: interaction.user.id,
+          reviewed_at: new Date().toISOString()
+        })
+        .eq('id', requestId);
+      if (updateError) throw updateError;
+
+      const approvedEmbed = EmbedBuilder.from(interaction.message.embeds[0])
+        .setColor(0x57f287)
+        .setTitle('✅ Solicitud aceptada')
+        .addFields({ name: 'Aceptada por', value: `<@${interaction.user.id}>` });
+      await interaction.editReply({ embeds: [approvedEmbed], components: [] });
+      return;
+    }
+
     if (interaction.isChatInputCommand() && interaction.commandName === 'resumen') {
       if (!hasSummaryRole(interaction)) {
         await interaction.reply({ content: 'No tienes el rol autorizado para consultar resúmenes.', ephemeral: true });

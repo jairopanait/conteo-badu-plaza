@@ -10,6 +10,8 @@ El comando `/resumen periodo usuario` está limitado al rol de supervisión conf
 
 Cada lunes a las 00:00 (Europe/Madrid), el bot publica automáticamente en el canal configurado el resumen de la semana anterior por vendedor: nombre, Discord ID, ventas, ítems y dinero total. Las ventas canceladas no se incluyen.
 
+El panel fijado de empleados permite solicitar rango indicando el Nombre IC. Las solicitudes se revisan en un canal privado y solo el rol de administración puede aceptarlas. Al aprobar, se asignan automáticamente los roles configurados. `/empleados` entrega al rol autorizado un CSV privado con el historial permanente de solicitudes, incluso de usuarios que ya abandonaron el servidor.
+
 ## Requisitos
 
 - Node.js 20 o posterior
