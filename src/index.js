@@ -490,6 +490,16 @@ client.on('interactionCreate', async (interaction) => {
     if (interaction.isModalSubmit() && interaction.customId === 'employee:request-modal') {
       await interaction.deferReply({ flags: MessageFlags.Ephemeral });
       const icName = interaction.fields.getTextInputValue('ic_name').trim();
+      let nicknameUpdated = false;
+      if (interaction.member?.manageable) {
+        nicknameUpdated = await interaction.member
+          .setNickname(icName, 'Nombre IC indicado en la solicitud de empleado')
+          .then(() => true)
+          .catch((error) => {
+            console.error(`No se pudo actualizar el apodo de ${interaction.user.id}:`, error);
+            return false;
+          });
+      }
       const roles = interaction.member.roles.cache
         .filter((role) => role.id !== interaction.guildId)
         .map((role) => role.id);
@@ -530,7 +540,11 @@ client.on('interactionCreate', async (interaction) => {
         .from('employee_requests')
         .update({ request_message_id: adminMessage.id })
         .eq('id', request.id);
-      await interaction.editReply('Tu solicitud se ha enviado correctamente a la administración.');
+      await interaction.editReply(
+        nicknameUpdated
+          ? `Tu solicitud se ha enviado correctamente y tu apodo se actualizó a **${icName}**.`
+          : 'Tu solicitud se ha enviado correctamente, pero Discord no permitió actualizar tu apodo. Se volverá a intentar al aprobarla.'
+      );
       return;
     }
 
@@ -559,6 +573,11 @@ client.on('interactionCreate', async (interaction) => {
           flags: MessageFlags.Ephemeral
         });
         return;
+      }
+      if (member.manageable && member.displayName !== request.ic_name) {
+        await member
+          .setNickname(request.ic_name, `Solicitud aceptada por ${interaction.user.username}`)
+          .catch((error) => console.error(`No se pudo actualizar el apodo de ${member.id}:`, error));
       }
       await member.roles.add(EMPLOYEE_GRANTED_ROLE_IDS, `Solicitud aceptada por ${interaction.user.username}`);
       const rolesAfterApproval = member.roles.cache
