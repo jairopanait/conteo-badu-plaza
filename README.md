@@ -8,7 +8,7 @@ El botón **Combo Sandwich + Agua** añade rápidamente la misma cantidad de amb
 
 El comando `/resumen periodo usuario` está limitado al rol de supervisión configurado. Resume el día, la semana o el mes actual de la persona elegida, con cantidades por artículo, número de ventas y dinero total.
 
-Cada lunes a las 00:00 (Europe/Madrid), el bot publica automáticamente en el canal configurado el resumen de la semana anterior por vendedor: nombre, Discord ID, ventas, ítems y dinero total. Las ventas canceladas no se incluyen.
+Cada lunes a las 00:00 (Europe/Madrid), el bot publica automáticamente en el canal configurado el resumen de la semana anterior por vendedor: nombre, Discord ID, ventas, ítems y dinero total, incluyendo el desglose de cantidad y dinero por cada ítem. Las ventas canceladas no se incluyen.
 
 El panel fijado de empleados permite solicitar rango indicando el Nombre IC. Las solicitudes se revisan en un canal privado y solo el rol de administración puede aceptarlas. Al aprobar, se asignan automáticamente los roles configurados. `/empleados` muestra de forma privada únicamente Nombre IC, usuario de Discord y User ID de cada persona, incluso si ya abandonó el servidor.
 

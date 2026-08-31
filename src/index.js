@@ -273,7 +273,7 @@ async function fetchSalesBetween(start, end) {
   for (let from = 0; ; from += pageSize) {
     const { data, error } = await supabase
       .from('sales')
-      .select('id,seller_discord_id,seller_name,quantity,total,discord_message_id')
+      .select('id,seller_discord_id,seller_name,item_id,item_name,quantity,total,discord_message_id')
       .eq('guild_id', process.env.DISCORD_GUILD_ID)
       .eq('status', 'active')
       .gte('created_at', start.toUTC().toISO())
@@ -290,13 +290,19 @@ async function sendWeeklyReport(start, end) {
   const channel = await client.channels.fetch(WEEKLY_REPORT_CHANNEL_ID);
   if (!channel?.isTextBased()) throw new Error('El canal del informe semanal no es un canal de texto');
 
-  const marker = `WEEKLY_REPORT:${start.toISODate()}`;
+  const marker = `WEEKLY_REPORT_V2:${start.toISODate()}`;
+  const legacyMarker = `WEEKLY_REPORT:${start.toISODate()}`;
   const recent = await channel.messages.fetch({ limit: 100 });
   const alreadySent = recent.some((message) =>
     message.author.id === client.user.id &&
     message.embeds.some((embed) => embed.footer?.text?.includes(marker))
   );
   if (alreadySent) return;
+  const legacyReports = recent.filter((message) =>
+    message.author.id === client.user.id &&
+    message.embeds.some((embed) => embed.footer?.text?.includes(legacyMarker))
+  );
+  await Promise.all(legacyReports.map((message) => message.delete().catch(() => null)));
 
   const sales = await fetchSalesBetween(start, end);
   const sellers = new Map();
@@ -306,19 +312,28 @@ async function sendWeeklyReport(start, end) {
       name: sale.seller_name,
       items: 0,
       money: 0,
-      saleIds: new Set()
+      saleIds: new Set(),
+      itemTotals: new Map()
     };
     current.name = sale.seller_name || current.name;
     current.items += sale.quantity;
     current.money += Number(sale.total);
     current.saleIds.add(sale.discord_message_id || sale.id);
+    const itemTotal = current.itemTotals.get(sale.item_id) || {
+      name: sale.item_name,
+      quantity: 0,
+      money: 0
+    };
+    itemTotal.quantity += sale.quantity;
+    itemTotal.money += Number(sale.total);
+    current.itemTotals.set(sale.item_id, itemTotal);
     sellers.set(sale.seller_discord_id, current);
   }
 
   const ranked = [...sellers.values()].sort((a, b) => b.money - a.money);
   const embeds = [];
-  const chunks = ranked.length ? Array.from({ length: Math.ceil(ranked.length / 20) }, (_, index) =>
-    ranked.slice(index * 20, index * 20 + 20)
+  const chunks = ranked.length ? Array.from({ length: Math.ceil(ranked.length / 6) }, (_, index) =>
+    ranked.slice(index * 6, index * 6 + 6)
   ) : [[]];
 
   for (let index = 0; index < chunks.length; index += 1) {
@@ -333,14 +348,23 @@ async function sendWeeklyReport(start, end) {
     if (!chunks[index].length) {
       embed.addFields({ name: 'Sin ventas', value: 'No hubo ventas activas durante esta semana.' });
     } else {
-      embed.addFields(chunks[index].map((seller) => ({
-        name: seller.name || 'Usuario desconocido',
-        value:
-          `Discord ID: \`${seller.id}\`\n` +
-          `Ventas: **${seller.saleIds.size.toLocaleString('es-ES')}** · ` +
-          `Ítems: **${seller.items.toLocaleString('es-ES')}** · ` +
-          `Total: **${money.format(seller.money)}**`
-      })));
+      embed.addFields(chunks[index].map((seller) => {
+        const itemLines = [...seller.itemTotals.values()]
+          .sort((a, b) => b.money - a.money)
+          .map((item) =>
+            `• ${item.name}: **${item.quantity.toLocaleString('es-ES')}** — **${money.format(item.money)}**`
+          )
+          .join('\n');
+        return {
+          name: seller.name || 'Usuario desconocido',
+          value:
+            `Discord ID: \`${seller.id}\`\n` +
+            `Ventas: **${seller.saleIds.size.toLocaleString('es-ES')}** · ` +
+            `Ítems: **${seller.items.toLocaleString('es-ES')}** · ` +
+            `Total: **${money.format(seller.money)}**\n` +
+            `**Detalle por ítem:**\n${itemLines}`
+        };
+      }));
     }
     embeds.push(embed);
   }
