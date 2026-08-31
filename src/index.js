@@ -2,7 +2,6 @@ require('dotenv').config();
 
 const {
   ActionRowBuilder,
-  AttachmentBuilder,
   ButtonBuilder,
   ButtonStyle,
   Client,
@@ -218,31 +217,6 @@ async function fetchAllEmployeeRequests() {
   return records;
 }
 
-function csvCell(value) {
-  const text = Array.isArray(value) ? value.join(' | ') : String(value ?? '');
-  return `"${text.replaceAll('"', '""')}"`;
-}
-
-function employeeCsv(records) {
-  const headers = [
-    'solicitud_id', 'discord_id', 'usuario_discord', 'nombre_ic', 'estado',
-    'roles_al_solicitar', 'roles_otorgados', 'fecha_solicitud', 'aprobado_por', 'fecha_aprobacion'
-  ];
-  const rows = records.map((record) => [
-    record.id,
-    record.discord_id,
-    record.discord_username,
-    record.ic_name,
-    record.status,
-    record.roles_at_request,
-    record.granted_roles,
-    record.requested_at,
-    record.reviewed_by,
-    record.reviewed_at
-  ].map(csvCell).join(','));
-  return `\uFEFF${headers.join(',')}\n${rows.join('\n')}`;
-}
-
 function periodRange(period) {
   const now = DateTime.now().setZone(TIMEZONE);
   const starts = {
@@ -402,13 +376,34 @@ client.on('interactionCreate', async (interaction) => {
       }
       await interaction.deferReply({ flags: MessageFlags.Ephemeral });
       const records = await fetchAllEmployeeRequests();
-      const attachment = new AttachmentBuilder(Buffer.from(employeeCsv(records), 'utf8'), {
-        name: `empleados-${DateTime.now().setZone(TIMEZONE).toFormat('yyyy-MM-dd')}.csv`
-      });
-      await interaction.editReply({
-        content: `Registro histórico: **${records.length.toLocaleString('es-ES')} solicitudes**.`,
-        files: [attachment]
-      });
+      const latestByUser = new Map();
+      for (const record of records) {
+        if (!latestByUser.has(record.discord_id)) latestByUser.set(record.discord_id, record);
+      }
+      const employees = [...latestByUser.values()];
+      if (!employees.length) {
+        await interaction.editReply('Todavía no hay solicitudes de empleados.');
+        return;
+      }
+      const embeds = [];
+      for (let index = 0; index < employees.length; index += 20) {
+        const chunk = employees.slice(index, index + 20);
+        const embed = new EmbedBuilder()
+          .setColor(0xf4a7c1)
+          .setTitle(index === 0 ? '👥 Registro de empleados' : '👥 Registro de empleados · continuación')
+          .addFields(chunk.map((record) => ({
+            name: record.ic_name,
+            value:
+              `Discord: **${record.discord_username}**\n` +
+              `User ID: \`${record.discord_id}\``
+          })))
+          .setFooter({ text: 'Se muestra la solicitud más reciente de cada persona.' });
+        if (index === 0) {
+          embed.setDescription(`Personas registradas: **${employees.length.toLocaleString('es-ES')}**`);
+        }
+        embeds.push(embed);
+      }
+      await interaction.editReply({ embeds: embeds.slice(0, 10) });
       return;
     }
 
