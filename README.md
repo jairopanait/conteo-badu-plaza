@@ -16,6 +16,8 @@ Al solicitar rango, el bot cambia el apodo del miembro por el Nombre IC indicado
 
 Cuando una solicitud se aprueba correctamente, el bot publica un mensaje de bienvenida con mención y Nombre IC en el canal configurado.
 
+El panel de inventario permite reponer cualquiera de los artículos. Cada venta descuenta existencias de forma atómica, una cancelación las devuelve y las ventas sin stock suficiente se bloquean. Supabase conserva un historial completo de reposiciones, ventas y devoluciones.
+
 Al arrancar, el bot importa sin duplicados a los miembros existentes que ya tienen el rol de empleado, usando su apodo visible en el servidor como Nombre IC. Esta función requiere activar **Server Members Intent** en Discord Developer Portal.
 
 ## Requisitos

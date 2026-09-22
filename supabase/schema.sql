@@ -12,6 +12,7 @@ create table if not exists public.sales (
   total bigint not null check (total >= 0),
   status text not null default 'active' check (status in ('active', 'cancelled')),
   discord_message_id text,
+  sale_batch_id uuid,
   created_at timestamptz not null default now(),
   cancelled_at timestamptz
 );

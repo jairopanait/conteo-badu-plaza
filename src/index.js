@@ -41,6 +41,7 @@ const WEEKLY_REPORT_CHANNEL_ID = '1543062522687393924';
 const EMPLOYEE_PANEL_CHANNEL_ID = '1541193810267344997';
 const EMPLOYEE_ADMIN_CHANNEL_ID = '1544111826193752175';
 const EMPLOYEE_WELCOME_CHANNEL_ID = '1541195608151433308';
+const INVENTORY_CHANNEL_ID = '1551950337609310299';
 const EMPLOYEE_MANAGER_ROLE_ID = '1541197720197406760';
 const EMPLOYEE_GRANTED_ROLE_IDS = [
   '1541197856793305138',
@@ -62,6 +63,64 @@ const money = new Intl.NumberFormat('en-US', {
   maximumFractionDigits: 0
 });
 const carts = new Map();
+
+async function fetchInventory() {
+  const { data, error } = await supabase.from('inventory').select('item_id,quantity');
+  if (error) throw error;
+  const quantities = new Map(data.map((row) => [row.item_id, Number(row.quantity)]));
+  return ITEMS.map((item) => ({ ...item, quantity: quantities.get(item.id) || 0 }));
+}
+
+async function inventoryPanelPayload() {
+  const inventory = await fetchInventory();
+  const embed = new EmbedBuilder()
+    .setColor(0xf4a7c1)
+    .setTitle('📦 Inventario · Badulaque Plaza Cubos')
+    .setDescription('Pulsa un artículo para añadir la cantidad que estás reponiendo.')
+    .addFields(
+      { name: 'Existencias', value: inventory.slice(0, 9).map((item) => `**${item.name}:** ${item.quantity.toLocaleString('es-ES')}`).join('\n'), inline: true },
+      { name: '\u200B', value: inventory.slice(9).map((item) => `**${item.name}:** ${item.quantity.toLocaleString('es-ES')}`).join('\n'), inline: true }
+    )
+    .setFooter({ text: 'INVENTORY_PANEL_V1' })
+    .setTimestamp();
+  const rows = [];
+  for (let index = 0; index < ITEMS.length; index += 5) {
+    rows.push(new ActionRowBuilder().addComponents(
+      ITEMS.slice(index, index + 5).map((item) =>
+        new ButtonBuilder()
+          .setCustomId(`inventory:restock:${item.id}`)
+          .setLabel(item.name)
+          .setStyle(ButtonStyle.Primary)
+      )
+    ));
+  }
+  rows[rows.length - 1].addComponents(
+    new ButtonBuilder()
+      .setCustomId('inventory:refresh')
+      .setLabel('Actualizar')
+      .setEmoji('🔄')
+      .setStyle(ButtonStyle.Secondary)
+  );
+  return { embeds: [embed], components: rows };
+}
+
+async function ensureInventoryPanel() {
+  const channel = await client.channels.fetch(INVENTORY_CHANNEL_ID);
+  if (!channel?.isTextBased()) throw new Error('El canal de inventario no es de texto');
+  const recent = await channel.messages.fetch({ limit: 100 });
+  let panel = recent.find((message) =>
+    message.author.id === client.user.id &&
+    message.embeds.some((embed) => embed.footer?.text === 'INVENTORY_PANEL_V1')
+  );
+  const payload = await inventoryPanelPayload();
+  if (panel) await panel.edit(payload);
+  else panel = await channel.send(payload);
+  if (!panel.pinned) await panel.pin().catch(() => null);
+}
+
+async function refreshInventoryPanel() {
+  await ensureInventoryPanel().catch((error) => console.error('No se pudo actualizar el inventario:', error));
+}
 
 function cartKey(interaction) {
   return `${interaction.guildId}:${interaction.user.id}`;
@@ -280,7 +339,7 @@ async function fetchSalesBetween(start, end) {
   for (let from = 0; ; from += pageSize) {
     const { data, error } = await supabase
       .from('sales')
-      .select('id,seller_discord_id,seller_name,item_id,item_name,quantity,total,discord_message_id')
+      .select('id,seller_discord_id,seller_name,item_id,item_name,quantity,total,discord_message_id,sale_batch_id')
       .eq('guild_id', process.env.DISCORD_GUILD_ID)
       .eq('status', 'active')
       .gte('created_at', start.toUTC().toISO())
@@ -325,7 +384,7 @@ async function sendWeeklyReport(start, end) {
     current.name = sale.seller_name || current.name;
     current.items += sale.quantity;
     current.money += Number(sale.total);
-    current.saleIds.add(sale.discord_message_id || sale.id);
+    current.saleIds.add(sale.sale_batch_id || sale.discord_message_id || sale.id);
     const itemTotal = current.itemTotals.get(sale.item_id) || {
       name: sale.item_name,
       quantity: 0,
@@ -421,6 +480,8 @@ client.once('ready', async () => {
     console.log('Panel de ventas preparado');
     await ensureEmployeePanel();
     console.log('Panel de solicitudes de empleados preparado');
+    await ensureInventoryPanel();
+    console.log('Panel de inventario preparado');
   } catch (error) {
     console.error('No se pudo preparar el panel:', error);
   }
@@ -439,6 +500,55 @@ client.once('ready', async () => {
 
 client.on('interactionCreate', async (interaction) => {
   try {
+    if (interaction.isButton() && interaction.customId === 'inventory:refresh') {
+      await interaction.update(await inventoryPanelPayload());
+      return;
+    }
+
+    if (interaction.isButton() && interaction.customId.startsWith('inventory:restock:')) {
+      const item = ITEM_BY_ID.get(interaction.customId.slice('inventory:restock:'.length));
+      if (!item) {
+        await interaction.reply({ content: 'Artículo no válido.', flags: MessageFlags.Ephemeral });
+        return;
+      }
+      const modal = new ModalBuilder()
+        .setCustomId(`inventory:restock-modal:${item.id}`)
+        .setTitle(`Reponer: ${item.name}`);
+      const quantity = new TextInputBuilder()
+        .setCustomId('quantity')
+        .setLabel('Cantidad que estás reponiendo')
+        .setPlaceholder('Ejemplo: 100')
+        .setStyle(TextInputStyle.Short)
+        .setRequired(true)
+        .setMaxLength(9);
+      modal.addComponents(new ActionRowBuilder().addComponents(quantity));
+      await interaction.showModal(modal);
+      return;
+    }
+
+    if (interaction.isModalSubmit() && interaction.customId.startsWith('inventory:restock-modal:')) {
+      const item = ITEM_BY_ID.get(interaction.customId.slice('inventory:restock-modal:'.length));
+      const rawQuantity = interaction.fields.getTextInputValue('quantity').trim();
+      const quantity = Number(rawQuantity);
+      if (!item || !/^\d+$/.test(rawQuantity) || !Number.isSafeInteger(quantity) || quantity < 1 || quantity > 100000000) {
+        await interaction.reply({ content: 'Introduce una cantidad entera entre 1 y 100.000.000.', flags: MessageFlags.Ephemeral });
+        return;
+      }
+      await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+      const { data: newQuantity, error } = await supabase.rpc('restock_inventory', {
+        p_item_id: item.id,
+        p_item_name: item.name,
+        p_quantity: quantity,
+        p_actor_discord_id: interaction.user.id
+      });
+      if (error) throw error;
+      await interaction.editReply(
+        `📦 Has añadido **${quantity.toLocaleString('es-ES')} ${item.name}**. Existencias actuales: **${Number(newQuantity).toLocaleString('es-ES')}**.`
+      );
+      await refreshInventoryPanel();
+      return;
+    }
+
     if (interaction.isChatInputCommand() && interaction.commandName === 'empleados') {
       if (!hasSummaryRole(interaction)) {
         await interaction.reply({ content: 'No tienes el rol autorizado para consultar empleados.', flags: MessageFlags.Ephemeral });
@@ -693,7 +803,7 @@ client.on('interactionCreate', async (interaction) => {
       const { start, end } = periodRange(period);
       const { data: sales, error } = await supabase
         .from('sales')
-        .select('id,item_id,item_name,quantity,total,discord_message_id')
+        .select('id,item_id,item_name,quantity,total,discord_message_id,sale_batch_id')
         .eq('guild_id', interaction.guildId)
         .eq('seller_discord_id', target.id)
         .eq('status', 'active')
@@ -722,7 +832,7 @@ client.on('interactionCreate', async (interaction) => {
         .setDescription(`**Usuario:** <@${target.id}>\n**Discord ID:** \`${target.id}\``)
         .addFields(
           { name: 'Total de artículos', value: totalUnits.toLocaleString('es-ES'), inline: true },
-          { name: 'Número de ventas', value: new Set(sales.map((sale) => sale.discord_message_id || sale.id)).size.toLocaleString('es-ES'), inline: true },
+          { name: 'Número de ventas', value: new Set(sales.map((sale) => sale.sale_batch_id || sale.discord_message_id || sale.id)).size.toLocaleString('es-ES'), inline: true },
           { name: 'Dinero total', value: `**${money.format(totalMoney)}**`, inline: true },
           { name: 'Artículos vendidos', value: itemLines }
         )
@@ -896,18 +1006,29 @@ client.on('interactionCreate', async (interaction) => {
       await interaction.deferReply({ flags: MessageFlags.Ephemeral });
       const entries = [...cart.values()];
       const grandTotal = entries.reduce((sum, entry) => sum + entry.item.price * entry.quantity, 0);
-      const records = entries.map(({ item, quantity }) => ({
-        guild_id: interaction.guildId,
-        seller_discord_id: interaction.user.id,
-        seller_name: interaction.user.globalName || interaction.user.username,
+      const batchId = crypto.randomUUID();
+      const saleItems = entries.map(({ item, quantity }) => ({
         item_id: item.id,
         item_name: item.name,
         unit_price: item.price,
-        quantity,
-        total: item.price * quantity
+        quantity
       }));
-      const { data: sales, error } = await supabase.from('sales').insert(records).select('id,created_at');
-      if (error) throw error;
+      const { data: sales, error } = await supabase.rpc('record_sale_with_inventory', {
+        p_guild_id: interaction.guildId,
+        p_seller_discord_id: interaction.user.id,
+        p_seller_name: interaction.user.globalName || interaction.user.username,
+        p_items: saleItems,
+        p_batch_id: batchId
+      });
+      if (error) {
+        const match = error.message?.match(/INSUFFICIENT_STOCK:([a-z0-9_]+)/i);
+        if (match) {
+          const item = ITEM_BY_ID.get(match[1]);
+          await interaction.editReply(`No hay existencias suficientes de **${item?.name || match[1]}**. Revisa el inventario.`);
+          return;
+        }
+        throw error;
+      }
       const firstSale = sales[0];
       const embed = new EmbedBuilder()
         .setColor(0xf4a7c1)
@@ -921,7 +1042,16 @@ client.on('interactionCreate', async (interaction) => {
         .setTimestamp(new Date(firstSale.created_at))
         .setFooter({ text: `Sistema de Ventas · ${firstSale.id}` });
       const salesChannel = await client.channels.fetch(process.env.SALES_CHANNEL_ID);
-      const message = await salesChannel.send({ embeds: [embed], components: [] });
+      let message;
+      try {
+        message = await salesChannel.send({ embeds: [embed], components: [] });
+      } catch (sendError) {
+        await supabase.rpc('cancel_sale_and_restore_inventory', {
+          p_sale_id: firstSale.id,
+          p_actor_discord_id: interaction.user.id
+        });
+        throw sendError;
+      }
       await supabase.from('sales').update({ discord_message_id: message.id }).in('id', sales.map((sale) => sale.id));
       const cancel = new ButtonBuilder()
         .setCustomId(`sale:cancel:${firstSale.id}`)
@@ -932,6 +1062,7 @@ client.on('interactionCreate', async (interaction) => {
         content: `Venta registrada correctamente: **${money.format(grandTotal)}**. Solo tú puedes ver este botón.`,
         components: [new ActionRowBuilder().addComponents(cancel)]
       });
+      await refreshInventoryPanel();
       return;
     }
 
@@ -976,14 +1107,10 @@ client.on('interactionCreate', async (interaction) => {
         return;
       }
 
-      let updateQuery = supabase
-        .from('sales')
-        .update({ status: 'cancelled', cancelled_at: new Date().toISOString() })
-        .eq('seller_discord_id', interaction.user.id);
-      updateQuery = sale.discord_message_id
-        ? updateQuery.eq('discord_message_id', sale.discord_message_id)
-        : updateQuery.eq('id', saleId);
-      const { error: updateError } = await updateQuery;
+      const { error: updateError } = await supabase.rpc('cancel_sale_and_restore_inventory', {
+        p_sale_id: saleId,
+        p_actor_discord_id: interaction.user.id
+      });
       if (updateError) throw updateError;
 
       if (sale.discord_message_id) {
@@ -1002,6 +1129,7 @@ client.on('interactionCreate', async (interaction) => {
         embeds: [],
         components: []
       });
+      await refreshInventoryPanel();
     }
   } catch (error) {
     console.error('Error procesando interacción:', error);
