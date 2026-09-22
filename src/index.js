@@ -9,6 +9,7 @@ const {
   GatewayIntentBits,
   MessageFlags,
   ModalBuilder,
+  PermissionFlagsBits,
   SlashCommandBuilder,
   StringSelectMenuBuilder,
   TextInputBuilder,
@@ -574,13 +575,65 @@ client.on('interactionCreate', async (interaction) => {
         });
         return;
       }
+      const botMember = interaction.guild.members.me || await interaction.guild.members.fetchMe();
+      if (!botMember.permissions.has(PermissionFlagsBits.ManageRoles)) {
+        await interaction.followUp({
+          content: 'No puedo asignar los roles porque me falta el permiso **Gestionar roles** en el servidor.',
+          flags: MessageFlags.Ephemeral
+        });
+        return;
+      }
+      if (!member.manageable) {
+        await interaction.followUp({
+          content: 'No puedo modificar a este miembro. Coloca el rol del bot por encima del rol más alto de la persona y vuelve a pulsar **Aceptar solicitud**.',
+          flags: MessageFlags.Ephemeral
+        });
+        return;
+      }
+      const rolesToGrant = [];
+      const blockedRoles = [];
+      for (const roleId of EMPLOYEE_GRANTED_ROLE_IDS) {
+        const role = await interaction.guild.roles.fetch(roleId).catch(() => null);
+        if (!role) {
+          blockedRoles.push(`\`${roleId}\` (no existe)`);
+        } else if (role.managed) {
+          blockedRoles.push(`${role} (rol administrado por una integración)`);
+        } else if (botMember.roles.highest.comparePositionTo(role) <= 0) {
+          blockedRoles.push(`${role} (está por encima o al mismo nivel que el bot)`);
+        } else {
+          rolesToGrant.push(role);
+        }
+      }
+      if (blockedRoles.length) {
+        await interaction.followUp({
+          content:
+            '**No pude asignar los roles por la jerarquía de Discord:**\n' +
+            blockedRoles.map((role) => `• ${role}`).join('\n') +
+            '\n\nMueve el rol del bot por encima de esos roles y vuelve a pulsar **Aceptar solicitud**.',
+          flags: MessageFlags.Ephemeral
+        });
+        return;
+      }
       if (member.manageable && member.displayName !== request.ic_name) {
         await member
           .setNickname(request.ic_name, `Solicitud aceptada por ${interaction.user.username}`)
           .catch((error) => console.error(`No se pudo actualizar el apodo de ${member.id}:`, error));
       }
-      await member.roles.add(EMPLOYEE_GRANTED_ROLE_IDS, `Solicitud aceptada por ${interaction.user.username}`);
-      const rolesAfterApproval = member.roles.cache
+      for (const role of rolesToGrant) {
+        if (!member.roles.cache.has(role.id)) {
+          await member.roles.add(role, `Solicitud aceptada por ${interaction.user.username}`);
+        }
+      }
+      const refreshedMember = await interaction.guild.members.fetch({ user: member.id, force: true });
+      const missingRoles = EMPLOYEE_GRANTED_ROLE_IDS.filter((roleId) => !refreshedMember.roles.cache.has(roleId));
+      if (missingRoles.length) {
+        await interaction.followUp({
+          content: `Discord no confirmó estos roles: ${missingRoles.map((id) => `<@&${id}>`).join(' ')}. Revisa la jerarquía y vuelve a intentarlo.`,
+          flags: MessageFlags.Ephemeral
+        });
+        return;
+      }
+      const rolesAfterApproval = refreshedMember.roles.cache
         .filter((role) => role.id !== interaction.guildId)
         .map((role) => role.id);
       const { error: updateError } = await supabase
