@@ -4,10 +4,13 @@ alter table public.sales
 create table if not exists public.inventory (
   item_id text primary key,
   item_name text not null,
-  quantity bigint not null default 0 check (quantity >= 0),
+  quantity bigint not null default 0,
   updated_at timestamptz not null default now(),
   updated_by text
 );
+
+alter table public.inventory
+  drop constraint if exists inventory_quantity_check;
 
 create table if not exists public.inventory_movements (
   id uuid primary key default gen_random_uuid(),
@@ -79,7 +82,6 @@ set search_path = public
 as $$
 declare
   item jsonb;
-  available bigint;
   sold public.sales%rowtype;
 begin
   if jsonb_typeof(p_items) <> 'array' or jsonb_array_length(p_items) = 0 then
@@ -94,18 +96,6 @@ begin
     insert into public.inventory (item_id, item_name, quantity)
     values (item->>'item_id', item->>'item_name', 0)
     on conflict (item_id) do update set item_name = excluded.item_name;
-  end loop;
-
-  for item in select value from jsonb_array_elements(p_items)
-  loop
-    select quantity into available
-    from public.inventory
-    where item_id = item->>'item_id'
-    for update;
-
-    if available < (item->>'quantity')::bigint then
-      raise exception 'INSUFFICIENT_STOCK:%', item->>'item_id';
-    end if;
   end loop;
 
   for item in select value from jsonb_array_elements(p_items)

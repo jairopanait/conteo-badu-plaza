@@ -1025,12 +1025,6 @@ client.on('interactionCreate', async (interaction) => {
         p_batch_id: batchId
       });
       if (error) {
-        const match = error.message?.match(/INSUFFICIENT_STOCK:([a-z0-9_]+)/i);
-        if (match) {
-          const item = ITEM_BY_ID.get(match[1]);
-          await interaction.editReply(`No hay existencias suficientes de **${item?.name || match[1]}**. Revisa el inventario.`);
-          return;
-        }
         throw error;
       }
       const firstSale = sales[0];
