@@ -480,10 +480,14 @@ client.once('ready', async () => {
     console.log('Panel de ventas preparado');
     await ensureEmployeePanel();
     console.log('Panel de solicitudes de empleados preparado');
+  } catch (error) {
+    console.error('No se pudo preparar el panel:', error);
+  }
+  try {
     await ensureInventoryPanel();
     console.log('Panel de inventario preparado');
   } catch (error) {
-    console.error('No se pudo preparar el panel:', error);
+    console.error('No se pudo preparar el panel de inventario:', error);
   }
   try {
     await runPreviousWeekReport();
