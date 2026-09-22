@@ -14,6 +14,8 @@ El panel fijado de empleados permite solicitar rango indicando el Nombre IC. Las
 
 Al solicitar rango, el bot cambia el apodo del miembro por el Nombre IC indicado y vuelve a intentarlo al aprobar la solicitud si Discord no permitió el primer cambio. Requiere **Gestionar apodos** y que el rol del bot esté por encima del miembro.
 
+Cuando una solicitud se aprueba correctamente, el bot publica un mensaje de bienvenida con mención y Nombre IC en el canal configurado.
+
 Al arrancar, el bot importa sin duplicados a los miembros existentes que ya tienen el rol de empleado, usando su apodo visible en el servidor como Nombre IC. Esta función requiere activar **Server Members Intent** en Discord Developer Portal.
 
 ## Requisitos

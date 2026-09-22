@@ -40,6 +40,7 @@ const PREVIOUS_PANEL_CHANNEL_ID = '1541196954837581946';
 const WEEKLY_REPORT_CHANNEL_ID = '1543062522687393924';
 const EMPLOYEE_PANEL_CHANNEL_ID = '1541193810267344997';
 const EMPLOYEE_ADMIN_CHANNEL_ID = '1544111826193752175';
+const EMPLOYEE_WELCOME_CHANNEL_ID = '1541195608151433308';
 const EMPLOYEE_MANAGER_ROLE_ID = '1541197720197406760';
 const EMPLOYEE_GRANTED_ROLE_IDS = [
   '1541197856793305138',
@@ -652,6 +653,26 @@ client.on('interactionCreate', async (interaction) => {
         })
         .eq('id', requestId);
       if (updateError) throw updateError;
+
+      const welcomeChannel = await client.channels.fetch(EMPLOYEE_WELCOME_CHANNEL_ID).catch(() => null);
+      if (welcomeChannel?.isTextBased()) {
+        const welcomeEmbed = new EmbedBuilder()
+          .setColor(0xf4a7c1)
+          .setTitle('🎉 ¡Bienvenido a Badulaque Plaza Cubos!')
+          .setDescription(
+            `¡Damos la bienvenida a <@${member.id}>! 🛒✨\n\n` +
+            `Tu solicitud ha sido aceptada y ya formas parte del equipo.\n` +
+            `**Nombre IC:** ${request.ic_name}\n\n` +
+            '¡Te deseamos muchas ventas y una gran experiencia con nosotros! 💖'
+          )
+          .setThumbnail(member.displayAvatarURL())
+          .setFooter({ text: 'Equipo de Badulaque Plaza Cubos' })
+          .setTimestamp();
+        await welcomeChannel.send({ content: `<@${member.id}>`, embeds: [welcomeEmbed] })
+          .catch((error) => console.error(`No se pudo enviar la bienvenida de ${member.id}:`, error));
+      } else {
+        console.error('El canal de bienvenida no existe o no es un canal de texto.');
+      }
 
       const approvedEmbed = EmbedBuilder.from(interaction.message.embeds[0])
         .setColor(0x57f287)
